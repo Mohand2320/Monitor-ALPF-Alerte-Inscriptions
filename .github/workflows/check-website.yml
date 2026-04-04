@@ -1,15 +1,11 @@
-name: 🔍 Monitor ALPF Website - Inscriptions
+name: 📧 Envoyer Email de Test
 
 on:
-  schedule:
-    # Deux vérifications par jour : 8h00 et 20h00 (UTC)
-    - cron: '0 8 * * *'
-    - cron: '0 20 * * *'
-  workflow_dispatch: # Permet de lancer manuellement depuis GitHub
+  workflow_dispatch: # Permet de lancer manuellement depuis GitHub (pas de schedule)
 
 jobs:
-  check-website:
-    name: Vérifier le message d'inscriptions fermées
+  send-test-email:
+    name: Envoyer un email de test
     runs-on: ubuntu-latest
 
     steps:
@@ -27,22 +23,21 @@ jobs:
           echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
           echo "HTTP Status: $HTTP_STATUS"
 
-      - name: 🔎 Vérifier la présence du message "inscriptions fermées"
+      - name: 🔎 Vérifier l'état du site
         id: check
         run: |
-          # Le message à surveiller
           MESSAGE="les inscriptions ont été fermées"
           
           if grep -qi "$MESSAGE" /tmp/page.html; then
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "✅ Message trouvé — inscriptions toujours fermées."
+            echo "status=FERMÉES"
+            echo "📌 Message trouvé — inscriptions actuellement fermées."
           else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "🚨 Message DISPARU — les inscriptions sont peut-être ouvertes !"
+            echo "status=OUVERTES"
+            echo "📌 Message absent — inscriptions probablement ouvertes."
           fi
 
-      - name: 📧 Envoyer un email si les inscriptions sont ouvertes
-        if: steps.check.outputs.found == 'false'
+      - name: 📧 Envoyer EMAIL DE TEST (toujours)
+        id: send_test
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -51,38 +46,50 @@ jobs:
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
           to: ${{ secrets.NOTIFY_EMAIL }}
-          from: "GitHub Monitor <${{ secrets.GMAIL_USER }}>"
-          subject: "🎓 ALPF — Les inscriptions sont peut-être ouvertes !"
+          from: "GitHub Monitor TEST <${{ secrets.GMAIL_USER }}>"
+          subject: "🧪 TEST EMAIL — Monitor ALPF"
           html_body: |
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 2px solid #2563eb; border-radius: 12px;">
-              <h2 style="color: #2563eb;">🎓 Alerte — Site ALPF imar-promotion</h2>
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 3px solid #f59e0b; border-radius: 12px; background-color: #fffbeb;">
+              <h2 style="color: #f59e0b;">🧪 Email de TEST — Monitor ALPF</h2>
               
               <p style="font-size: 16px; color: #111;">
-                Le message <em>"les inscriptions ont été fermées"</em> a 
-                <strong style="color: #dc2626;">disparu</strong> du site web.
+                Ceci est un <strong>email de TEST</strong> du workflow GitHub Actions.
               </p>
 
-              <p style="font-size: 15px;">
-                👉 Cela signifie que les inscriptions sont probablement <strong>ouvertes</strong> ou que la page a changé.
+              <div style="background-color: #fef3c7; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                <p style="margin: 0; font-size: 14px;">
+                  <strong>État du site actuellement :</strong><br>
+                  Statut HTTP : ${{ steps.fetch.outputs.http_status }}<br>
+                  Inscriptions : <strong>fermées</strong> ✅
+                </p>
+              </div>
+
+              <p style="font-size: 14px; color: #666;">
+                L'email fonctionne correctement ! 🎉<br>
+                Vous recevrez un email similaire quand les inscriptions s'ouvriront.
               </p>
 
               <a href="https://alpf.imar-promotion.com/" 
-                 style="display:inline-block; margin-top:16px; padding: 12px 24px; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold;">
-                Visiter le site maintenant →
+                 style="display:inline-block; margin-top:16px; padding: 12px 24px; background:#f59e0b; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold;">
+                Voir le site →
               </a>
 
               <hr style="margin-top: 32px; border-color: #e5e7eb;">
-              <p style="font-size: 12px; color: #9ca3af;">
-                Détection effectuée le : ${{ github.event.repository.updated_at }}<br>
-                Workflow GitHub Actions — Monitor ALPF
+              <p style="font-size: 12px; color: #999;">
+                Test envoyé le : <strong>${{ github.event.repository.updated_at }}</strong><br>
+                Workflow : Monitor ALPF — Send Test Email<br>
+                <em>Branche : test-email</em>
               </p>
             </div>
 
-      - name: ✅ Résumé du run
+      - name: ✅ Résumé du Test
         run: |
           echo "=================================="
-          echo "Site      : https://alpf.imar-promotion.com/"
-          echo "Statut HTTP : ${{ steps.fetch.outputs.http_status }}"
-          echo "Message trouvé : ${{ steps.check.outputs.found }}"
-          echo "Email envoyé : ${{ steps.check.outputs.found == 'false' }}"
+          echo "🧪 TEST EMAIL — RÉSUMÉ"
           echo "=================================="
+          echo "Site         : https://alpf.imar-promotion.com/"
+          echo "Statut HTTP  : ${{ steps.fetch.outputs.http_status }}"
+          echo "Email envoyé : ✅ OUI (TOUJOURS EN TEST)"
+          echo "À : ${{ secrets.NOTIFY_EMAIL }}"
+          echo "=================================="
+          echo "Vérifiez votre boîte mail ! 📧"
