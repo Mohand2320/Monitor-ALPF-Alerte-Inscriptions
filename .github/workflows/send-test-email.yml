@@ -1,0 +1,95 @@
+name: 📧 Envoyer Email de Test
+
+on:
+  workflow_dispatch: # Permet de lancer manuellement depuis GitHub (pas de schedule)
+
+jobs:
+  send-test-email:
+    name: Envoyer un email de test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Télécharger le contenu du site
+        id: fetch
+        run: |
+          echo "Fetching website content..."
+          HTTP_STATUS=$(curl -s -o /tmp/page.html -w "%{http_code}" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            "https://alpf.imar-promotion.com/")
+          
+          echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+          echo "HTTP Status: $HTTP_STATUS"
+
+      - name: 🔎 Vérifier l'état du site
+        id: check
+        run: |
+          MESSAGE="les inscriptions ont été fermées"
+          
+          if grep -qi "$MESSAGE" /tmp/page.html; then
+            echo "status=FERMÉES"
+            echo "📌 Message trouvé — inscriptions actuellement fermées."
+          else
+            echo "status=OUVERTES"
+            echo "📌 Message absent — inscriptions probablement ouvertes."
+          fi
+
+      - name: 📧 Envoyer EMAIL DE TEST (toujours)
+        id: send_test
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USER }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: "GitHub Monitor TEST <${{ secrets.GMAIL_USER }}>"
+          subject: "🧪 TEST EMAIL — Monitor ALPF"
+          html_body: |
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 3px solid #f59e0b; border-radius: 12px; background-color: #fffbeb;">
+              <h2 style="color: #f59e0b;">🧪 Email de TEST — Monitor ALPF</h2>
+              
+              <p style="font-size: 16px; color: #111;">
+                Ceci est un <strong>email de TEST</strong> du workflow GitHub Actions.
+              </p>
+
+              <div style="background-color: #fef3c7; padding: 16px; border-radius: 8px; margin: 16px 0;">
+                <p style="margin: 0; font-size: 14px;">
+                  <strong>État du site actuellement :</strong><br>
+                  Statut HTTP : ${{ steps.fetch.outputs.http_status }}<br>
+                  Inscriptions : <strong>fermées</strong> ✅
+                </p>
+              </div>
+
+              <p style="font-size: 14px; color: #666;">
+                L'email fonctionne correctement ! 🎉<br>
+                Vous recevrez un email similaire quand les inscriptions s'ouvriront.
+              </p>
+
+              <a href="https://alpf.imar-promotion.com/" 
+                 style="display:inline-block; margin-top:16px; padding: 12px 24px; background:#f59e0b; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold;">
+                Voir le site →
+              </a>
+
+              <hr style="margin-top: 32px; border-color: #e5e7eb;">
+              <p style="font-size: 12px; color: #999;">
+                Test envoyé le : <strong>${{ github.event.repository.updated_at }}</strong><br>
+                Workflow : Monitor ALPF — Send Test Email<br>
+                <em>Branche : test-email</em>
+              </p>
+            </div>
+
+      - name: ✅ Résumé du Test
+        run: |
+          echo "=================================="
+          echo "🧪 TEST EMAIL — RÉSUMÉ"
+          echo "=================================="
+          echo "Site         : https://alpf.imar-promotion.com/"
+          echo "Statut HTTP  : ${{ steps.fetch.outputs.http_status }}"
+          echo "Email envoyé : ✅ OUI (TOUJOURS EN TEST)"
+          echo "À : ${{ secrets.NOTIFY_EMAIL }}"
+          echo "=================================="
+          echo "Vérifiez votre boîte mail ! 📧"
