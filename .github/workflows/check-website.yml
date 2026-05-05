@@ -25,6 +25,45 @@ jobs:
           npm init -y
           npm install nodemailer
 
+      - name: 🧪 Test curl direct (diagnostic)
+        run: |
+          echo "======================================="
+          echo "Test 1 : avec headers navigateur"
+          echo "======================================="
+          curl -v --max-time 15 \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+            -H "Accept: application/json, text/plain, */*" \
+            -H "Accept-Language: fr-FR,fr;q=0.9,ar;q=0.8" \
+            -H "Referer: https://adhahi.dz/" \
+            -H "Origin: https://adhahi.dz" \
+            -L \
+            "https://adhahi.dz/api/v1/public/wilaya-quotas" \
+            2>&1
+
+          echo ""
+          echo "======================================="
+          echo "Test 2 : curl simple sans headers"
+          echo "======================================="
+          curl -v --max-time 15 -L \
+            "https://adhahi.dz/api/v1/public/wilaya-quotas" \
+            2>&1
+
+          echo ""
+          echo "======================================="
+          echo "Test 3 : ping DNS"
+          echo "======================================="
+          nslookup adhahi.dz || true
+          ping -c 3 adhahi.dz || true
+
+          echo ""
+          echo "======================================="
+          echo "Test 4 : page principale du site"
+          echo "======================================="
+          curl -s --max-time 15 -o /dev/null -w "HTTP Status: %{http_code}\n" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+            "https://adhahi.dz/" \
+            2>&1
+
       - name: 🔄 Boucle de surveillance (10 secondes)
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
@@ -34,24 +73,20 @@ jobs:
           const https      = require('https');
           const nodemailer = require('nodemailer');
 
-          // ─── CONFIG ───────────────────────────────────────────────
-          const INTERVAL_MS = 10 * 1000;  // ✅ 10 secondes (minimum stable)
+          const INTERVAL_MS = 10 * 1000;
           const API_URL     = 'https://adhahi.dz/api/v1/public/wilaya-quotas';
           const SITE_URL    = 'https://adhahi.dz/register';
 
-          // Wilayas surveillées spécialement
           const WATCHED = {
             '23': ['ad.khodja@gmail.com', 'mohandamoua.enageo@gmail.com'],
             '18': ['m.boufenissa@gmail.com']
           };
 
-          // Destinataires pour toutes les autres wilayas
           const ALL_RECIPIENTS = [
             'ad.khodja@gmail.com',
             'mohandamoua.enageo@gmail.com',
             'm.boufenissa@gmail.com'
           ];
-          // ─────────────────────────────────────────────────────────
 
           const transporter = nodemailer.createTransport({
             host: 'smtp.gmail.com', port: 465, secure: true,
@@ -61,24 +96,42 @@ jobs:
             }
           });
 
-          // ── Appel API ─────────────────────────────────────────────
           function fetchQuotas() {
             return new Promise((resolve, reject) => {
-              const req = https.get(API_URL, {
+              const options = {
                 headers: {
-                  'User-Agent' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                  'Accept'     : 'application/json',
-                  'Referer'    : 'https://adhahi.dz/'
+                  'User-Agent'      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                  'Accept'          : 'application/json, text/plain, */*',
+                  'Accept-Language' : 'fr-FR,fr;q=0.9,ar;q=0.8',
+                  'Referer'         : 'https://adhahi.dz/',
+                  'Origin'          : 'https://adhahi.dz',
+                  'Connection'      : 'keep-alive'
                 }
-              }, res => {
+              };
+
+              const req = https.get(API_URL, options, res => {
+                // Suivre les redirects manuellement
+                if (res.statusCode === 301 || res.statusCode === 302) {
+                  console.log(`   ↩️  Redirect → ${res.headers.location}`);
+                  reject(new Error(`Redirect ${res.statusCode} vers ${res.headers.location}`));
+                  return;
+                }
+
+                console.log(`   📡 HTTP Status : ${res.statusCode}`);
+
                 let raw = '';
                 res.on('data', c => raw += c);
                 res.on('end', () => {
+                  if (res.statusCode !== 200) {
+                    reject(new Error(`HTTP ${res.statusCode} — ${raw.slice(0, 200)}`));
+                    return;
+                  }
                   try { resolve(JSON.parse(raw)); }
-                  catch (e) { reject(new Error('JSON invalide')); }
+                  catch (e) { reject(new Error(`JSON invalide : ${raw.slice(0, 100)}`)); }
                 });
               });
-              req.on('error', reject);
+
+              req.on('error', err => reject(new Error(`Réseau : ${err.message}`)));
               req.setTimeout(8000, () => {
                 req.destroy();
                 reject(new Error('Timeout API (8s)'));
@@ -86,33 +139,23 @@ jobs:
             });
           }
 
-          // ── Envoi email ───────────────────────────────────────────
           async function sendEmail(to, wilayas, isSpecial, code) {
-            const now      = new Date().toLocaleString('fr-DZ', { timeZone: 'Africa/Algiers' });
-            const color    = isSpecial ? '#7c3aed' : '#059669';
-            const bg       = isSpecial ? '#f5f3ff' : '#f0fdf4';
-            const border   = isSpecial ? '#a78bfa' : '#86efac';
-            const subject  = isSpecial
+            const now    = new Date().toLocaleString('fr-DZ', { timeZone: 'Africa/Algiers' });
+            const color  = isSpecial ? '#7c3aed' : '#059669';
+            const bg     = isSpecial ? '#f5f3ff' : '#f0fdf4';
+            const border = isSpecial ? '#a78bfa' : '#86efac';
+            const subject = isSpecial
               ? `🚨 Wilaya ${code} disponible sur Adhahi !`
               : `🕌 Adhahi — ${wilayas.length} wilaya(s) disponible(s) !`;
-            const banner   = isSpecial
+            const banner = isSpecial
               ? `🚨 WILAYA ${code} EST DISPONIBLE !`
               : `✅ ${wilayas.length} wilaya(s) avec réservation disponible !`;
 
             const rows = wilayas.map(w => `
-              <tr style="background:${Object.keys(WATCHED).includes(w.wilayaCode)
-                ? '#ede9fe' : 'white'};">
-                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;
-                           text-align:center;font-weight:bold;color:#6b7280;">
-                  ${w.wilayaCode}
-                </td>
-                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;
-                           direction:rtl;">
-                  ${w.wilayaNameAr}
-                </td>
-                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;">
-                  ${w.wilayaNameFr}
-                </td>
+              <tr style="background:${Object.keys(WATCHED).includes(w.wilayaCode) ? '#ede9fe' : 'white'};">
+                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;text-align:center;font-weight:bold;color:#6b7280;">${w.wilayaCode}</td>
+                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;direction:rtl;">${w.wilayaNameAr}</td>
+                <td style="padding:9px 14px;border-bottom:1px solid #e5e7eb;">${w.wilayaNameFr}</td>
               </tr>
             `).join('');
 
@@ -124,19 +167,16 @@ jobs:
                 <div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;
                             padding:28px;border:2px solid ${color};border-radius:14px;
                             background:${bg};">
-
                   <h2 style="color:#065f46;margin-bottom:4px;">🕌 Alerte — Adhahi.dz</h2>
                   <p style="color:#6b7280;font-size:13px;margin-top:0;">
                     Détection automatique · GitHub Actions · toutes les 10s
                   </p>
-
                   <div style="background:${bg};border:2px solid ${border};
                               border-radius:10px;padding:16px;margin:20px 0;">
                     <p style="font-size:18px;font-weight:bold;color:${color};margin:0;">
                       ${banner}
                     </p>
                   </div>
-
                   <h3 style="color:#374151;">📍 Wilayas disponibles :</h3>
                   <table style="width:100%;border-collapse:collapse;font-size:14px;
                                 border:1px solid #d1fae5;border-radius:8px;overflow:hidden;">
@@ -149,14 +189,12 @@ jobs:
                     </thead>
                     <tbody>${rows}</tbody>
                   </table>
-
                   <a href="${SITE_URL}"
                      style="display:inline-block;margin-top:24px;padding:13px 30px;
                             background:${color};color:#fff;text-decoration:none;
                             border-radius:9px;font-weight:bold;font-size:15px;">
                     🔗 S'inscrire maintenant →
                   </a>
-
                   <hr style="margin-top:30px;border-color:#e5e7eb;">
                   <p style="font-size:12px;color:#9ca3af;text-align:center;">
                     Détecté le : ${now} · adhahi.dz monitor
@@ -164,15 +202,11 @@ jobs:
                 </div>
               `
             });
-
             const dest = Array.isArray(to) ? to.join(', ') : to;
             console.log(`   📧 Envoyé → ${dest}`);
           }
 
-          // ── Logique alertes ───────────────────────────────────────
           async function handleAlerts(available, sent) {
-
-            // ── Wilayas spéciales (23 et 18) ──────────────────────
             for (const [code, recipients] of Object.entries(WATCHED)) {
               const w = available.find(x => x.wilayaCode === code);
               if (w && !sent[code]) {
@@ -182,7 +216,6 @@ jobs:
               }
             }
 
-            // ── Toutes les autres wilayas ──────────────────────────
             const others = available.filter(w => !Object.keys(WATCHED).includes(w.wilayaCode));
             if (others.length > 0 && !sent.others) {
               console.log(`   🟢 ${others.length} autre(s) wilaya(s) disponible(s)`);
@@ -191,7 +224,6 @@ jobs:
             }
           }
 
-          // ── Boucle principale ─────────────────────────────────────
           (async () => {
             let checkCount = 0;
             let sent       = { '23': false, '18': false, others: false };
@@ -218,7 +250,6 @@ jobs:
                   await handleAlerts(available, sent);
                 } else {
                   console.log(`→ ❌ aucune`);
-                  // Reset complet si tout repasse à false
                   sent = { '23': false, '18': false, others: false };
                 }
 
