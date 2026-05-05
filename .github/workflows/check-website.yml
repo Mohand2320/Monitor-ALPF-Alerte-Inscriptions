@@ -2,13 +2,14 @@ name: 🕌 Monitor Adhahi - Wilayas Disponibles
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # ✅ Toutes les 5 minutes (minimum GitHub)
-  workflow_dispatch:
+    - cron: '0 */6 * * *'  # Relance automatique toutes les 6h
+  workflow_dispatch:        # Lancement manuel possible
 
 jobs:
   check-wilayas:
-    name: Vérifier les wilayas disponibles
+    name: Boucle de vérification (toutes les 30s)
     runs-on: ubuntu-latest
+    timeout-minutes: 350
 
     steps:
       - name: 📥 Checkout
@@ -19,113 +20,168 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 📦 Installer Playwright
+      - name: 📦 Installer les dépendances
         run: |
           npm init -y
-          npm install playwright
+          npm install playwright nodemailer
           npx playwright install chromium --with-deps
 
-      - name: 🔍 Scraper les wilayas disponibles
-        id: scrape
+      - name: 🔄 Boucle de surveillance (intervalle 30 secondes)
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
-          cat << 'EOF' > scrape.js
+          cat << 'EOF' > monitor.js
           const { chromium } = require('playwright');
+          const nodemailer  = require('nodemailer');
 
-          (async () => {
-            const browser = await chromium.launch({ headless: true });
-            const page = await browser.newPage();
+          // ─── CONFIG ───────────────────────────────────────────────
+          const INTERVAL_MS  = 30 * 1000;  // 30 secondes
+          const TARGET_URL   = 'https://adhahi.dz/register';
+          const RECIPIENTS   = [
+            'ad.khodja@gmail.com',
+            'mohandamoua.enageo@gmail.com'
+          ];
+          // ─────────────────────────────────────────────────────────
 
-            await page.setExtraHTTPHeaders({
-              'Accept-Language': 'fr-FR,fr;q=0.9,ar;q=0.8'
-            });
-
-            console.log('Navigation vers le site...');
-            await page.goto('https://adhahi.dz/register', {
-              waitUntil: 'networkidle',
-              timeout: 60000
-            });
-
-            try {
-              await page.waitForSelector('[role="listbox"]', { timeout: 15000 });
-            } catch (e) {
-              console.log('Listbox non trouvé, on continue...');
+          const transporter = nodemailer.createTransport({
+            host   : 'smtp.gmail.com',
+            port   : 465,
+            secure : true,
+            auth: {
+              user: process.env.GMAIL_USER,
+              pass: process.env.GMAIL_APP_PASSWORD,
             }
+          });
 
-            await page.waitForTimeout(3000);
-
-            const available = await page.evaluate(() => {
-              const options = document.querySelectorAll('[role="option"]');
-              const result = [];
-              options.forEach(el => {
-                const isDisabled = el.getAttribute('aria-disabled') === 'true';
-                if (!isDisabled) {
-                  result.push(el.textContent.trim());
-                }
+          // ── Scraping ──────────────────────────────────────────────
+          async function checkWilayas() {
+            const browser = await chromium.launch({ headless: true });
+            const page    = await browser.newPage();
+            try {
+              await page.setExtraHTTPHeaders({
+                'Accept-Language': 'fr-FR,fr;q=0.9,ar;q=0.8'
               });
-              return result;
+              await page.goto(TARGET_URL, {
+                waitUntil : 'networkidle',
+                timeout   : 30000
+              });
+
+              // Attendre le listbox
+              try {
+                await page.waitForSelector('[role="listbox"]', { timeout: 10000 });
+              } catch (_) {}
+
+              await page.waitForTimeout(2000);
+
+              // Extraire uniquement les wilayas disponibles (sans aria-disabled)
+              const available = await page.evaluate(() => {
+                return [...document.querySelectorAll('[role="option"]')]
+                  .filter(el => el.getAttribute('aria-disabled') !== 'true')
+                  .map(el => el.textContent.trim());
+              });
+
+              return available;
+            } finally {
+              await browser.close();
+            }
+          }
+
+          // ── Email ─────────────────────────────────────────────────
+          async function sendAlert(wilayas) {
+            const now      = new Date().toLocaleString('fr-DZ', { timeZone: 'Africa/Algiers' });
+            const listHtml = wilayas
+              .map(w => `<li style="direction:rtl; padding:5px 0; font-size:15px;">${w}</li>`)
+              .join('');
+
+            await transporter.sendMail({
+              from    : `"Adhahi Monitor" <${process.env.GMAIL_USER}>`,
+              to      : RECIPIENTS.join(', '),
+              subject : `🕌 Adhahi — ${wilayas.length} wilaya(s) disponible(s) !`,
+              html    : `
+                <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;
+                            padding:28px;border:2px solid #059669;border-radius:14px;
+                            background:#f0fdf4;">
+
+                  <h2 style="color:#065f46;margin-bottom:4px;">🕌 Alerte — Adhahi.dz</h2>
+                  <p style="color:#6b7280;font-size:13px;margin-top:0;">
+                    Détection automatique via GitHub Actions
+                  </p>
+
+                  <div style="background:#dcfce7;border:1px solid #86efac;
+                              border-radius:10px;padding:16px;margin:20px 0;">
+                    <p style="font-size:18px;font-weight:bold;color:#15803d;margin:0;">
+                      ✅ ${wilayas.length} wilaya(s) avec réservation disponible !
+                    </p>
+                  </div>
+
+                  <h3 style="color:#374151;">📍 Wilayas disponibles :</h3>
+                  <ul style="background:white;border-radius:8px;padding:16px 32px;
+                             border:1px solid #d1fae5;line-height:2.2;list-style:none;">
+                    ${listHtml}
+                  </ul>
+
+                  <a href="${TARGET_URL}"
+                     style="display:inline-block;margin-top:20px;padding:13px 28px;
+                            background:#059669;color:#fff;text-decoration:none;
+                            border-radius:9px;font-weight:bold;font-size:15px;">
+                    🔗 S'inscrire maintenant →
+                  </a>
+
+                  <hr style="margin-top:30px;border-color:#d1fae5;">
+                  <p style="font-size:12px;color:#9ca3af;text-align:center;">
+                    Détecté le : ${now}<br>
+                    Vérification toutes les 30 secondes · GitHub Actions
+                  </p>
+                </div>
+              `
             });
 
-            await browser.close();
+            console.log(`📧 Email envoyé à : ${RECIPIENTS.join(', ')}`);
+          }
 
-            const fs = require('fs');
-            const output = process.env.GITHUB_OUTPUT;
-            fs.appendFileSync(output, `count=${available.length}\n`);
-            fs.appendFileSync(output, `wilayas=${JSON.stringify(available)}\n`);
+          // ── Boucle principale ─────────────────────────────────────
+          (async () => {
+            let emailSent  = false;
+            let checkCount = 0;
 
-            if (available.length > 0) {
-              console.log('✅ Wilayas disponibles:', available);
-            } else {
-              console.log('❌ Aucune wilaya disponible.');
+            console.log('🚀 Démarrage de la surveillance...');
+            console.log(`🔗 URL    : ${TARGET_URL}`);
+            console.log(`⏱️  Interval : ${INTERVAL_MS / 1000}s`);
+            console.log(`📧 Destinataires : ${RECIPIENTS.join(', ')}`);
+            console.log('─'.repeat(50));
+
+            while (true) {
+              checkCount++;
+              const now = new Date().toLocaleString('fr-DZ', { timeZone: 'Africa/Algiers' });
+              console.log(`\n🔍 Check #${checkCount} — [${now}]`);
+
+              try {
+                const wilayas = await checkWilayas();
+
+                if (wilayas.length > 0) {
+                  console.log(`✅ ${wilayas.length} wilaya(s) disponible(s) :`, wilayas);
+
+                  if (!emailSent) {
+                    await sendAlert(wilayas);
+                    emailSent = true;  // ✅ Évite les doublons d'email
+                  } else {
+                    console.log('📭 Email déjà envoyé pour cette session.');
+                  }
+
+                } else {
+                  console.log('❌ Aucune wilaya disponible.');
+                  emailSent = false;  // Reset si tout redevient indisponible
+                }
+
+              } catch (err) {
+                console.error(`⚠️  Erreur lors du check #${checkCount} :`, err.message);
+              }
+
+              // Attendre 30 secondes avant le prochain check
+              await new Promise(r => setTimeout(r, INTERVAL_MS));
             }
           })();
           EOF
 
-          node scrape.js
-
-      - name: 📧 Envoyer les emails si des wilayas sont disponibles
-        if: steps.scrape.outputs.count != '0'
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.GMAIL_USER }}
-          password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          to: "ad.khodja@gmail.com,mohandamoua.enageo@gmail.com"   # ✅ Les deux destinataires
-          from: "Adhahi Monitor <${{ secrets.GMAIL_USER }}>"
-          subject: "🕌 Adhahi — ${{ steps.scrape.outputs.count }} wilaya(s) disponible(s) !"
-          html_body: |
-            <div style="font-family: Arial, sans-serif; max-width: 620px; margin: auto; padding: 28px; border: 2px solid #059669; border-radius: 14px; background: #f0fdf4;">
-
-              <h2 style="color: #065f46; margin-bottom: 4px;">🕌 Alerte — Adhahi.dz</h2>
-              <p style="color: #6b7280; font-size: 13px; margin-top: 0;">Détection automatique via GitHub Actions</p>
-
-              <div style="background: #dcfce7; border: 1px solid #86efac; border-radius: 10px; padding: 16px; margin: 20px 0;">
-                <p style="font-size: 17px; font-weight: bold; color: #15803d; margin: 0;">
-                  ✅ ${{ steps.scrape.outputs.count }} wilaya(s) avec réservation disponible !
-                </p>
-              </div>
-
-              <h3 style="color: #374151;">📍 Wilayas disponibles :</h3>
-              <div style="background: white; border-radius: 8px; padding: 16px 24px; border: 1px solid #d1fae5; font-size: 15px; color: #111827; direction: rtl; line-height: 2;">
-                ${{ steps.scrape.outputs.wilayas }}
-              </div>
-
-              <a href="https://adhahi.dz/register"
-                 style="display:inline-block; margin-top: 20px; padding: 13px 28px; background: #059669; color: #fff; text-decoration: none; border-radius: 9px; font-weight: bold; font-size: 15px;">
-                🔗 S'inscrire maintenant →
-              </a>
-
-              <hr style="margin-top: 30px; border-color: #d1fae5;">
-              <p style="font-size: 12px; color: #9ca3af; text-align: center;">
-                Vérifié automatiquement toutes les 5 minutes · GitHub Actions · adhahi.dz
-              </p>
-            </div>
-
-      - name: 📊 Résumé du run
-        run: |
-          echo "======================================="
-          echo "Site         : https://adhahi.dz/register"
-          echo "Wilayas dispo: ${{ steps.scrape.outputs.count }}"
-          echo "Liste        : ${{ steps.scrape.outputs.wilayas }}"
-          echo "======================================="
+          node monitor.js
