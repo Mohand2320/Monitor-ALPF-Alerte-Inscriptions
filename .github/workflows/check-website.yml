@@ -1,48 +1,89 @@
-name: 🔍 Monitor ALPF Website - Inscriptions
+name: 🕌 Monitor Adhahi - Wilayas Disponibles
 
 on:
   schedule:
-    # Deux vérifications par jour : 8h00 et 20h00 (UTC)
-    - cron: '0 8 * * *'
-    - cron: '0 20 * * *'
-  workflow_dispatch: # Permet de lancer manuellement depuis GitHub
+    - cron: '*/5 * * * *'   # ✅ Toutes les 5 minutes (minimum GitHub)
+  workflow_dispatch:
 
 jobs:
-  check-website:
-    name: Vérifier le message d'inscriptions fermées
+  check-wilayas:
+    name: Vérifier les wilayas disponibles
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Télécharger le contenu du site
-        id: fetch
-        run: |
-          echo "Fetching website content..."
-          HTTP_STATUS=$(curl -s -o /tmp/page.html -w "%{http_code}" \
-            --max-time 30 \
-            --retry 3 \
-            --retry-delay 5 \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-            "https://alpf.imar-promotion.com/")
-          
-          echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
-          echo "HTTP Status: $HTTP_STATUS"
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
 
-      - name: 🔎 Vérifier la présence du message "inscriptions fermées"
-        id: check
-        run: |
-          # Le message à surveiller
-          MESSAGE="les inscriptions ont été fermées"
-          
-          if grep -qi "$MESSAGE" /tmp/page.html; then
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "✅ Message trouvé — inscriptions toujours fermées."
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "🚨 Message DISPARU — les inscriptions sont peut-être ouvertes !"
-          fi
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: 📧 Envoyer un email si les inscriptions sont ouvertes
-        if: steps.check.outputs.found == 'false'
+      - name: 📦 Installer Playwright
+        run: |
+          npm init -y
+          npm install playwright
+          npx playwright install chromium --with-deps
+
+      - name: 🔍 Scraper les wilayas disponibles
+        id: scrape
+        run: |
+          cat << 'EOF' > scrape.js
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+
+            await page.setExtraHTTPHeaders({
+              'Accept-Language': 'fr-FR,fr;q=0.9,ar;q=0.8'
+            });
+
+            console.log('Navigation vers le site...');
+            await page.goto('https://adhahi.dz/register', {
+              waitUntil: 'networkidle',
+              timeout: 60000
+            });
+
+            try {
+              await page.waitForSelector('[role="listbox"]', { timeout: 15000 });
+            } catch (e) {
+              console.log('Listbox non trouvé, on continue...');
+            }
+
+            await page.waitForTimeout(3000);
+
+            const available = await page.evaluate(() => {
+              const options = document.querySelectorAll('[role="option"]');
+              const result = [];
+              options.forEach(el => {
+                const isDisabled = el.getAttribute('aria-disabled') === 'true';
+                if (!isDisabled) {
+                  result.push(el.textContent.trim());
+                }
+              });
+              return result;
+            });
+
+            await browser.close();
+
+            const fs = require('fs');
+            const output = process.env.GITHUB_OUTPUT;
+            fs.appendFileSync(output, `count=${available.length}\n`);
+            fs.appendFileSync(output, `wilayas=${JSON.stringify(available)}\n`);
+
+            if (available.length > 0) {
+              console.log('✅ Wilayas disponibles:', available);
+            } else {
+              console.log('❌ Aucune wilaya disponible.');
+            }
+          })();
+          EOF
+
+          node scrape.js
+
+      - name: 📧 Envoyer les emails si des wilayas sont disponibles
+        if: steps.scrape.outputs.count != '0'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -50,39 +91,41 @@ jobs:
           secure: true
           username: ${{ secrets.GMAIL_USER }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: "GitHub Monitor <${{ secrets.GMAIL_USER }}>"
-          subject: "🎓 ALPF — Les inscriptions sont peut-être ouvertes !"
+          to: "ad.khodja@gmail.com,mohandamoua.enageo@gmail.com"   # ✅ Les deux destinataires
+          from: "Adhahi Monitor <${{ secrets.GMAIL_USER }}>"
+          subject: "🕌 Adhahi — ${{ steps.scrape.outputs.count }} wilaya(s) disponible(s) !"
           html_body: |
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 24px; border: 2px solid #2563eb; border-radius: 12px;">
-              <h2 style="color: #2563eb;">🎓 Alerte — Site ALPF imar-promotion</h2>
-              
-              <p style="font-size: 16px; color: #111;">
-                Le message <em>"les inscriptions ont été fermées"</em> a 
-                <strong style="color: #dc2626;">disparu</strong> du site web.
-              </p>
+            <div style="font-family: Arial, sans-serif; max-width: 620px; margin: auto; padding: 28px; border: 2px solid #059669; border-radius: 14px; background: #f0fdf4;">
 
-              <p style="font-size: 15px;">
-                👉 Cela signifie que les inscriptions sont probablement <strong>ouvertes</strong> ou que la page a changé.
-              </p>
+              <h2 style="color: #065f46; margin-bottom: 4px;">🕌 Alerte — Adhahi.dz</h2>
+              <p style="color: #6b7280; font-size: 13px; margin-top: 0;">Détection automatique via GitHub Actions</p>
 
-              <a href="https://alpf.imar-promotion.com/" 
-                 style="display:inline-block; margin-top:16px; padding: 12px 24px; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; font-weight:bold;">
-                Visiter le site maintenant →
+              <div style="background: #dcfce7; border: 1px solid #86efac; border-radius: 10px; padding: 16px; margin: 20px 0;">
+                <p style="font-size: 17px; font-weight: bold; color: #15803d; margin: 0;">
+                  ✅ ${{ steps.scrape.outputs.count }} wilaya(s) avec réservation disponible !
+                </p>
+              </div>
+
+              <h3 style="color: #374151;">📍 Wilayas disponibles :</h3>
+              <div style="background: white; border-radius: 8px; padding: 16px 24px; border: 1px solid #d1fae5; font-size: 15px; color: #111827; direction: rtl; line-height: 2;">
+                ${{ steps.scrape.outputs.wilayas }}
+              </div>
+
+              <a href="https://adhahi.dz/register"
+                 style="display:inline-block; margin-top: 20px; padding: 13px 28px; background: #059669; color: #fff; text-decoration: none; border-radius: 9px; font-weight: bold; font-size: 15px;">
+                🔗 S'inscrire maintenant →
               </a>
 
-              <hr style="margin-top: 32px; border-color: #e5e7eb;">
-              <p style="font-size: 12px; color: #9ca3af;">
-                Détection effectuée le : ${{ github.event.repository.updated_at }}<br>
-                Workflow GitHub Actions — Monitor ALPF
+              <hr style="margin-top: 30px; border-color: #d1fae5;">
+              <p style="font-size: 12px; color: #9ca3af; text-align: center;">
+                Vérifié automatiquement toutes les 5 minutes · GitHub Actions · adhahi.dz
               </p>
             </div>
 
-      - name: ✅ Résumé du run
+      - name: 📊 Résumé du run
         run: |
-          echo "=================================="
-          echo "Site      : https://alpf.imar-promotion.com/"
-          echo "Statut HTTP : ${{ steps.fetch.outputs.http_status }}"
-          echo "Message trouvé : ${{ steps.check.outputs.found }}"
-          echo "Email envoyé : ${{ steps.check.outputs.found == 'false' }}"
-          echo "=================================="
+          echo "======================================="
+          echo "Site         : https://adhahi.dz/register"
+          echo "Wilayas dispo: ${{ steps.scrape.outputs.count }}"
+          echo "Liste        : ${{ steps.scrape.outputs.wilayas }}"
+          echo "======================================="
